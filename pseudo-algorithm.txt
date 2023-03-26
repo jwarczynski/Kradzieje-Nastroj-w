@@ -1,0 +1,33 @@
+S - ilość sprzętu do kradziejowania
+N - liczba stanowsik w laboratorium
+
+Lokalne zmienne każdego kradzieja:
+	kolejka po szprzęt uszeregowana wg czasów zapytań o sprzęt
+	kolejka do laboratorium uszeregowana wg czasów zapytań o laboratorium 
+
+
+1. LOOP
+2.	wyślij sprzęt request do wszytskich kradziejów
+3.	czekaj aż otrzymasz potwierdzenie młodsze od własnego request od każdego kradzieja
+4. 	wstaw się w odpowiednie miejsce do kolejki po sprzęt wg czasu request'ów
+5. 	IF pozycja request'a w pierwszych S pozycjach kolejki po sprzęt:
+6.		szukaj ofiary (random time)
+7. 		after(random time) wyślij wiadomość zowlnienia sprzętu do wszystkich 
+8. 		wyślij laboratorium request do wszytskich kradziejów
+9.		czekaj aż otrzymasz potwierdzenie młodsze od lab-request od każdego kradzieja
+10. 	wstaw się w odpowiednie miejsce do kolejki do laboratorium wg czasu lab-request'ów
+11.		IF pozycja lab-request'a w pierwszych N pozycjach kolejki do labortaorium:
+12.			korzystaj z laboratorium (random time)
+13. 		wyślij wiadomość zwolnienia laboratorium do wszystkich 
+14.		ELSE:
+15.			czekaj na wiadomości zwolnienia laboratorium
+16.			usuń odpowiedni wpis z kolejki do laboratorium
+17.			GOTO 11
+18.		END IF
+19.	ELSE:
+20.		czekaj na wiadomość zwolnienia sprzętu
+21.		usuń odpowiedni wpis z sprzęt kolejki
+22.		GOTO 5
+23.	END IF
+24. Kiedykolwiek przyjdzie zapytanie o sprzęt lub laboratorium:
+25.		wstaw zapytanie do odpowidniej kolejki wg czasu zapytania	
