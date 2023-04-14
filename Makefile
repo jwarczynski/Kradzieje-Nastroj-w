@@ -8,7 +8,7 @@ main: kradzieje.cpp main.h
 	mpicc $(SRC) $(FLAGS2) -o $(TARGET)
 
 run: main
-	mpirun -np 4 --oversubscribe kradzieje
+	mpirun -np 8 --oversubscribe kradzieje 8
 
 clean:
 	rm -f kradzieje a.out

@@ -1,3 +1,4 @@
+#include <map>
 #include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +13,7 @@
 #include <chrono>
 #include <algorithm>
 #include <vector>
+#include <limits>
 
 #include "main.h"
 
@@ -21,10 +23,9 @@
 #define FALSE 0
 
 #define ROOT 0
-#define ACK_TAG 100
-#define RESOURCE_TAG 200
 #define EQUIPMENT_NUM 2
 #define LAB_NUM 2
+#define TAG 2
 
 enum MsgType {
 	LAB_REQUEST,
@@ -73,6 +74,7 @@ typedef struct {
 		std::mutex& labMutex;
 		std::mutex& equipmentMutex;
 		std::mutex& timeMutex;
+		std::map<int, int> acks;
 } state_t;
 
 
@@ -179,25 +181,24 @@ void makeChewingGum(int rank) {
 	println("LEFT laboratory");
 }
 
-void collectAcks(state_t& processState, std::vector<int> requestTimes, int num_processes, int rank) {
-		std::vector<bool> acks(num_processes, false);
-		acks[rank] = true;
-		while(!std::all_of(acks.begin(), acks.end(), [](bool b) { return b; })) {
-			packet_t ackPacket;
-			MPI_Status status;
-			MPI_Recv( &ackPacket, 1, MPI_PAKIET_T, MPI_ANY_SOURCE, ACK_TAG, MPI_COMM_WORLD, &status);
-			debug("RECEIVED ACK from %d with timestamp %d", ackPacket.src, ackPacket.timestamp);
-			processState.timestamp = std::max(processState.timestamp, ackPacket.timestamp);
-			incrementLogicTime(processState);
-			if (ackPacket.timestamp > requestTimes[ackPacket.src]) {
-				acks[ackPacket.src] = true;	
-			}
+bool acksCollected(std::map<int, int>& myMap, int requestTime) {
+    for (auto& [key, value] : myMap) {
+        if (value < requestTime) {
+            return false;
+        }
+    }
+    return true;
+}
+
+
+void waitForAcks(state_t& processState, int requestTime, int num_processes, int rank) {
+		while(!acksCollected(processState.acks, requestTime)) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(500));
 		}
 }
 
-std::vector<int> sendResourceRequests(state_t& processState, int rank, int num_processes, MsgType requestType) {
+packet_t sendResourceRequests(state_t& processState, int rank, int num_processes, MsgType requestType) {
 		processState.timeMutex.lock();
-		std::vector<int> requestTimes(num_processes);
 
 		packet_t requestPkt{
 			rank,
@@ -205,36 +206,14 @@ std::vector<int> sendResourceRequests(state_t& processState, int rank, int num_p
 			processState.timestamp
 		};
 
-		if (requestType == EQUIPMENT_REQUEST) {
-			processState.equipmentMutex.lock();
-			processState.equipmentQueue.push(requestPkt);
-			processState.equipmentMutex.unlock();
-		} else {
-			processState.labMutex.lock();
-			processState.labQueue.push(requestPkt);
-			processState.labMutex.unlock();
-		}
-
 		for (int dest=0; dest<num_processes; ++dest) {
 			if (dest != rank) {
-				//processState.timestamp ++;
-				//incrementLogicTime(processState);
-				//if (requestType == EQUIPMENT_REQUEST)
-				//		processState.equipmentMutex.lock();
-				//else
-				//		processState.labMutex.lock();
-				//requestPkt.timestamp = processState.timestamp;
-				requestTimes[dest] = processState.timestamp;
-				MPI_Send(&requestPkt, 1, MPI_PAKIET_T, dest, RESOURCE_TAG, MPI_COMM_WORLD);
+				MPI_Send(&requestPkt, 1, MPI_PAKIET_T, dest, TAG, MPI_COMM_WORLD);
 				debug("SEND resource request of type %s to %d with timestamp %d", MsgTypeStrings[requestType], dest, processState.timestamp);
-				//if (requestType == EQUIPMENT_REQUEST)
-				//		processState.equipmentMutex.unlock();
-				//else
-				//		processState.labMutex.unlock();
 			}	
 		}
 		processState.timeMutex.unlock();
-		return requestTimes;
+		return requestPkt;
 }
 
 void chargeEquipment(state_t& processState, int rank, MsgType releaseType, int num_processes) {
@@ -250,7 +229,7 @@ void chargeEquipment(state_t& processState, int rank, MsgType releaseType, int n
 
 		for (int dest=0; dest<num_processes; ++dest) {
 			if (dest != rank) {
-				MPI_Send(&releasePkt, 1, MPI_PAKIET_T, dest, RESOURCE_TAG, MPI_COMM_WORLD);
+				MPI_Send(&releasePkt, 1, MPI_PAKIET_T, dest, TAG, MPI_COMM_WORLD);
 			}	
 		}
 		processState.timestamp ++;
@@ -265,7 +244,7 @@ void brodcastMessage(packet_t& packet, state_t& processState, int num_processes,
 				incrementLogicTime(processState);
 				processState.timeMutex.lock();
 				packet.timestamp = processState.timestamp;
-				MPI_Send(&packet, 1, MPI_PAKIET_T, dest, tag, MPI_COMM_WORLD);
+				MPI_Send(&packet, 1, MPI_PAKIET_T, dest, TAG, MPI_COMM_WORLD);
 				processState.timeMutex.unlock();
 			}	
 		}
@@ -278,7 +257,7 @@ void broadcastLabRelease(state_t &processState, int num_processes, int rank) {
 		processState.timestamp
 	};
 	
-	brodcastMessage(packet, processState, num_processes, rank, RESOURCE_TAG);
+	brodcastMessage(packet, processState, num_processes, rank, TAG);
 }
 
 void kradziejuj(state_t& processState, int rank) {
@@ -286,13 +265,16 @@ void kradziejuj(state_t& processState, int rank) {
 		MPI_Comm_size(MPI_COMM_WORLD, &num_processes);
 
 		while (true) {
-			std::vector<int> requestTimes = sendResourceRequests(processState, rank, num_processes, EQUIPMENT_REQUEST);	
-			debug("SEND EQUIPMENT_REQUEST to everyone");
-			collectAcks(processState, requestTimes, num_processes, rank);	
-			debug("COLLECTED EQUIPMENT_REQUEST ACKs from everyone");
+			packet_t requestPkt = sendResourceRequests(processState, rank, num_processes, EQUIPMENT_REQUEST);	
+			debug("SEND EQUIPMENT_REQUEST to everyone ts:%d", processState.timestamp);
+			waitForAcks(processState, requestPkt.timestamp, num_processes, rank);	
+			processState.equipmentMutex.lock();
+			processState.equipmentQueue.push(requestPkt);
+			processState.equipmentMutex.unlock();
+			debug("COLLECTED EQUIPMENT_REQUEST ACKs from everyone ts:%d", processState.timestamp);
 			while(!isPacketInTopNPackets(processState.equipmentQueue, EQUIPMENT_NUM, rank)){
 				debug("WAIT for equipment");
-				std::this_thread::sleep_for(std::chrono::milliseconds(50));
+				std::this_thread::sleep_for(std::chrono::milliseconds(500));
 			}
 			processState.equipmentMutex.lock();
 			removePacketWithSrc(processState.equipmentQueue, rank);
@@ -302,9 +284,12 @@ void kradziejuj(state_t& processState, int rank) {
 			std::thread chargeEquipmentThread(chargeEquipment, std::ref(processState), rank, EQUIPMENT_RELEASE, num_processes);
 			chargeEquipmentThread.detach();
 
-			requestTimes = sendResourceRequests(processState, rank, num_processes, LAB_REQUEST);	
-			debug("SEND LAB_REQUEST to everyone");
-			collectAcks(processState, requestTimes, num_processes, rank);	
+			packet_t labRequestPkt = sendResourceRequests(processState, rank, num_processes, LAB_REQUEST);	
+			debug("SEND LAB_REQUEST to everyone ts:%d", processState.timestamp);
+			waitForAcks(processState, labRequestPkt.timestamp, num_processes, rank);	
+			processState.labMutex.lock();
+			processState.labQueue.push(requestPkt);
+			processState.labMutex.unlock();
 			debug("COLLECTED LAB_REQUEST ACKs from everyone\n", rank);
 			while(!isPacketInTopNPackets(processState.labQueue, LAB_NUM, rank)){
 				debug("WAIT for laboratory");
@@ -314,8 +299,11 @@ void kradziejuj(state_t& processState, int rank) {
 			debug("MADE chewing gum");
 			broadcastLabRelease(processState, num_processes, rank);
 			debug("BRODCASTED lab release");
-			// its wrong, I can not wait for below process to finish
 		}
+}
+
+void updateAck(state_t& processState, packet_t ackPacket) {
+	processState.acks[ackPacket.src] = ackPacket.timestamp;
 }
 
 void processResourceMessages(state_t& processState, int rank) {
@@ -323,15 +311,16 @@ void processResourceMessages(state_t& processState, int rank) {
 		MPI_Status status;
 
 		while (true) {
-			MPI_Recv( &packet, 1, MPI_PAKIET_T, MPI_ANY_SOURCE, RESOURCE_TAG, MPI_COMM_WORLD, &status);
-			debug("RECEIVED %s packet from %d with timestamp: %d\n", MsgTypeStrings[packet.data], packet.src, packet.timestamp);
+			MPI_Recv( &packet, 1, MPI_PAKIET_T, MPI_ANY_SOURCE, TAG, MPI_COMM_WORLD, &status);
+			//debug("RECEIVED %s packet from %d with timestamp: %d\n", MsgTypeStrings[packet.data], packet.src, packet.timestamp);
 			processState.timeMutex.lock();
 			processState.timestamp = std::max(processState.timestamp, packet.timestamp) + 1;
 			switch (packet.data) {
 				case LAB_REQUEST: processLabRequest(processState, packet, rank); break;
 				case EQUIPMENT_REQUEST: processEquipmentRequest(processState, packet, rank); break;
 				case LAB_RELEASE: processLabReleaseRequest(processState, packet, rank); break;
-				case EQUIPMENT_RELEASE: processEquipmentReleaseRequest(processState, packet, rank);
+				case EQUIPMENT_RELEASE: processEquipmentReleaseRequest(processState, packet, rank); break;
+				case ACK: updateAck(processState, packet);
 			}
 			processState.timeMutex.unlock();
 		}
@@ -358,11 +347,9 @@ void processLabRequest(state_t& processState, packet_t& packet, int rank) {
 		ACK,
 		processState.timestamp + 1
 	};
-	//processState.timeMutex.lock();
 	processState.timestamp += 1;
-	MPI_Send( &ackPacket, 1, MPI_PAKIET_T, packet.src, ACK_TAG, MPI_COMM_WORLD);
+	MPI_Send( &ackPacket, 1, MPI_PAKIET_T, packet.src, TAG, MPI_COMM_WORLD);
 	debug("SEND ack to %d with timestamp %d", packet.src, processState.timestamp);
-	//processState.timeMutex.unlock();
 }
 
 void processEquipmentRequest(state_t& processState, packet_t& packet, int rank) {
@@ -374,11 +361,9 @@ void processEquipmentRequest(state_t& processState, packet_t& packet, int rank) 
 		ACK,
 		processState.timestamp + 1
 	};
-	//processState.timeMutex.lock();
 	processState.timestamp += 1;
-	MPI_Send( &ackPacket, 1, MPI_PAKIET_T, packet.src, ACK_TAG, MPI_COMM_WORLD);
+	MPI_Send( &ackPacket, 1, MPI_PAKIET_T, packet.src, TAG, MPI_COMM_WORLD);
 	debug("SEND ack to %d with timestamp %d", packet.src, processState.timestamp);
-	//processState.timeMutex.unlock();
 }
 
 int main(int argc, char **argv)
@@ -392,38 +377,52 @@ int main(int argc, char **argv)
 		//	0, 1, 1
 		//};
 
+		//packet_t younger2 {
+		//	1, 1, 1
+		//};
+
 		//equpimentQueue.push(younger);
 		//equpimentQueue.push(older);
-		//
-		//printf("%d", equpimentQueue.top().timestamp);
-
-	
+		//equpimentQueue.push(younger2);
 		
     int rank, size, provided;
-    //MPI_Status status;
+    MPI_Status status;
     MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
     srand(rank);
     inicjuj_typ_pakietu(); // tworzy typ pakietu
     MPI_Comm_size(MPI_COMM_WORLD, &size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+	//	for(int i = 0; i < equpimentQueue.size(); ++i) {
+	//		println("priority:%d time:%d src:%d", i, equpimentQueue.top().timestamp, equpimentQueue.top().src);
+	//		equpimentQueue.pop();
+	//	}
+			int numThreads = std::stoi(argv[1]);	
+	//		println("threads: %d", numThreads);
+
+	
+		
+
 		std::priority_queue<packet_t, std::vector<packet_t>, PacketComparator> equpimentQueue;
-
-
 		std::priority_queue<packet_t, std::vector<packet_t>, PacketComparator> labQueue;
 		int timestamp = 0;
     std::mutex eqMutex, labMutex, timestampMutex;
 		state_t state {
-			labQueue,
-			equpimentQueue,
-			timestamp,
-			labMutex,
-			eqMutex,
-			timestampMutex
+			.labQueue = labQueue,
+			.equipmentQueue = equpimentQueue,
+			.timestamp = timestamp,
+			.labMutex = labMutex,
+			.equipmentMutex = eqMutex,
+			.timeMutex = timestampMutex,
+			.acks = std::map<int, int>(),
 		};
 
-	  debug("starting processing");
+		for (int i = 0; i < numThreads; i++) {
+				state.acks[i] = -1;
+		}
+		state.acks[rank] = std::numeric_limits<int>::max();
 
+	  debug("starting processing");
 		std::thread kradziejThread(kradziejuj, std::ref(state), std::ref(rank));
 		std::thread resourceThread(processResourceMessages, std::ref(state), std::ref(rank));
 
