@@ -23,7 +23,7 @@ $(EXECUTABLE): $(CPP_OBJS)
 	$(CXX) $(CXX_FLAGS) $(SRC) $^ -o $@
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXX_FLAGS) -c $< -o $@
 
 run: $(EXECUTABLE)
 	mpirun -np 8 $(EXECUTABLE) 8
