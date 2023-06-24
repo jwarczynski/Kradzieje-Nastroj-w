@@ -1,5 +1,6 @@
-#ifndef MAINH
-#define MAINH
+#ifndef DEBUG_MACRO_H
+#define DEBUG_MACRO_H
+
 #include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,9 +8,6 @@
 #include <unistd.h>
 #include <string.h>
 
-/* boolean */
-#define TRUE 1
-#define FALSE 0
 
 /* macro debug - działa jak printf, kiedy zdefiniowano
    DEBUG, kiedy DEBUG niezdefiniowane działa jak instrukcja pusta 
