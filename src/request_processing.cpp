@@ -72,3 +72,7 @@ void incrementLogicTime(state_t& processState) {
 	processState.timestamp ++;
 	processState.timeMutex.unlock();
 }
+
+void updateAck(state_t& processState, packet_t ackPacket) {
+	processState.acks[ackPacket.src] = ackPacket.timestamp;
+}
