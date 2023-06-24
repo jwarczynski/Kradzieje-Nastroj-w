@@ -5,9 +5,10 @@ BIN_DIR := bin
 
 CPP_FILES := $(shell find $(SRC_DIR) -name '*.cpp')
 CPP_OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(CPP_FILES))
+DEP_FILES := $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.d,$(CPP_FILES))
 
 CXX := mpic++
-CXX_FLAGS := $(foreach D,$(INC_DIRS),-I$(D))
+CXX_FLAGS := $(foreach D,$(INC_DIRS),-I$(D)) -MMD -MP
 
 
 EXECUTABLE := $(BIN_DIR)/kradzieje
@@ -22,6 +23,8 @@ all: $(EXECUTABLE)
 $(EXECUTABLE): $(CPP_OBJS)
 	$(CXX) $(CXX_FLAGS) $(SRC) $^ -o $@
 
+-include $(DEP_FILES)
+
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
 	$(CXX) $(CXX_FLAGS) -c $< -o $@
 
@@ -33,4 +36,4 @@ debug: $(EXECUTABLE)
 	mpirun -np 8 $(EXECUTABLE)
 
 clean:
-	rm -f $(EXECUTABLE) $(CPP_OBJS)
+	rm -f $(EXECUTABLE) $(CPP_OBJS) $(DEP_FILES)
